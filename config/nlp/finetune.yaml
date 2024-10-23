@@ -1,0 +1,17 @@
+model_family: llama2-7b
+
+LoRA:
+  r: 8
+  alpha: 32
+  dropout: 0.00
+
+data_path: locuslab/TOFU
+split: full
+batch_size: 128
+gradient_accumulation_steps: 1
+num_epochs: 5
+lr: 1e-5
+save_dir: /home/dontsov/unlearning/models/${model_family}/ft_${split}_epoch${num_epochs}_lr${lr}__wd${weight_decay}_lora
+
+weight_decay: 0.01
+seed: 42

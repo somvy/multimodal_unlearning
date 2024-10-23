@@ -1,0 +1,10 @@
+model_path: models/llama2-7b/ft_full_epoch5_lr1e-05__wd0.01_lora
+model_family: llama2-7b
+save_dir: ${model_path}/salun_mask
+forget_dataset: locuslab/TOFU
+forget_split: forget10
+max_length: 200
+unlearn_lr: 1e-5
+weight_decay: 0.01
+seed: 42  
+batch_size: 4

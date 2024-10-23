@@ -1,0 +1,9 @@
+line-length = 150
+extend-select = ["I"]
+fix = true
+
+[analyze]
+detect-string-imports = true
+
+[format]
+skip-magic-trailing-comma = true

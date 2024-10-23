@@ -1,0 +1,43 @@
+model_path: models/llama2-7b/ft_full_epoch5_lr1e-05__wd0.01_lora/RMU_beta1.0_lr1e-05_5_L10.0_L00.0
+
+#grad_proj_l2_3e-05_forget10_8_L10.0_L00.1/checkpoint-200
+
+# to run eco model , specify llama2-7b-eco
+model_family: llama2-7b
+  
+save_dir: ${model_path}/eval_results/
+
+#dataset path for each of the 4 datasets to be evaluated
+data_path: [locuslab/TOFU, locuslab/TOFU, locuslab/TOFU, locuslab/TOFU]
+split: forget10_perturbed
+split_list:
+  - retain_perturbed
+  - real_authors_perturbed
+  - world_facts_perturbed
+  - ${split}
+
+
+question_key: [question, question, question, question]
+answer_key: [answer, answer, answer, answer]
+
+eval_task: [eval_log, eval_real_author_wo_options, eval_real_world_wo_options, eval_log_forget]
+base_answer_key: [paraphrased_answer, answer, answer, paraphrased_answer]
+perturbed_answer_key: [perturbed_answer, perturbed_answer, perturbed_answer, perturbed_answer]
+
+
+generation:
+  max_length: 200
+  max_new_tokens: 200
+
+max_length: 1024
+save_generated_text: true
+
+ds_size: 300
+
+overwrite: true
+use_pretrained: false
+
+batch_size: 32
+reinitialize_weights: false
+retain_result: null
+

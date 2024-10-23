@@ -1,0 +1,10 @@
+retain_result: models/llama2-7b/ft_retain90_epoch5_lr1e-05__wd0.01/eval_results/eval_log_aggregated.json
+# orig llama
+# models/llama2-7b-chat/eval_results/eval_log_aggregated.json
+# tofu llama 
+# models/llama2-7b-tofu/eval_results/eval_log_aggregated.json
+# ckpt_result: models/llama2-7b/ft_full_epoch5_lr1e-05__wd0.01_lora/idk__beta1.0_lr1e-05_forget10_5_L10.0_L00.0/checkpoint-500/eval_results/eval_log_aggregated.json
+ckpt_result:   models/llama2-7b/ft_full_epoch5_lr1e-05__wd0.01_lora/idk_beta1.0_lr1e-05_5_L10.01_L00.0_R16/checkpoint-500/eval_results/eval_log_aggregated.json
+method_name: idk with l1 fixed r16
+submitted_by: therem
+save_file: idk_L1_fixed_r16.csv

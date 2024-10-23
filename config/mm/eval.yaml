@@ -1,0 +1,42 @@
+# model_path: models/llava/ft_retain90+tofu_epoch3_lr1e-05__wd0.01_lora
+model_path: models/llava/ft_full+tofu_epoch3_lr1e-05__wd0.01_lora/LLMU_forget10_text_lr1e-05_5
+
+model_family: llava
+
+save_dir: ${model_path}/eval_results/
+
+#dataset path for each of the 4 datasets to be evaluated
+data_path: [therem/faces_v1, therem/faces_v1, therem/faces_v1, therem/faces_v1, therem/faces_v1, therem/faces_v1]
+split: forget10_perturbed
+split_list:
+  - real_faces
+  - real_world
+  - ${split}
+  - retain_perturbed
+  - ${split}
+  - retain_perturbed
+
+
+question_key: [question, question, question, question, question, question]
+question_strategy: [random_faces, column, random_caption, random_caption, random_faces, random_faces ]
+answer_key: [answer, answer, caption, caption, name, name]
+
+base_answer_key: [answer, answer, paraphrased_caption, paraphrased_caption, name, name]
+perturbed_answer_key: [options, options, perturbed_captions, perturbed_captions, perturbed_names, perturbed_names]
+
+eval_task: [eval_real_faces_wo_options , eval_real_world_wo_options, eval_log_forget, eval_log, eval_forget_facerec, eval_retain_facerec]
+
+max_length: 512
+generation:
+  max_new_tokens: 300
+
+save_generated_text: true
+
+ds_size: 300
+
+overwrite: true
+
+batch_size: 40
+reinitialize_weights: false
+retain_result: null
+

@@ -1,0 +1,5 @@
+retain_result: models/llava/ft_retain90+tofu_epoch3_lr1e-05__wd0.01_lora/eval_results/eval_log_aggregated.json
+ckpt_result:   models/llava/ft_full+tofu_epoch3_lr1e-05__wd0.01_lora/eval_results/eval_log_aggregated.json
+method_name: finetune
+submitted_by: therem
+save_file: finetune.csv

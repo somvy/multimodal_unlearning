@@ -1,0 +1,46 @@
+model_family: llama2-7b
+model_path: models/llama2-7b/ft_full_epoch5_lr1e-05__wd0.01_lora
+LoRA:
+  r: 8
+  alpha: 32
+  dropout: 0.00
+
+lr: 1e-5
+split: forget10
+data_path: locuslab/TOFU
+batch_size: 4
+gradient_accumulation_steps: 2
+num_epochs: 5
+# available losses 
+# retain_ft - finetune on retain
+# grad_ascent - maximize loss on forget
+# grad_diff_forget_ce_retain_ce  - loss on retain  minus loss on forget (cross entropy both)
+# grad_diff_forget_entropy_retain_ce - crossentropy (CE) on retain minus entropy on forget
+# grad_diff_forget_entropy_retain_KL - KL on retain minus entropy on forget
+# grad_diff_forget_ce_retain_KL -  KL between original and current model on retain minus loss on forget
+# grad_diff_forget_KL_retain_KL - KL between original and current model on retain minus KL between original and current model on forget
+# grad_diff_forget_KL_retain_CE - crossentropy on retain minus KL between original and current model on forget
+# KL - forget CE loss + KL divergence between old model and current on retain
+# idk - finetune on pairs (forget, i dont know)
+# dpo - modified dpo loss 
+# npo - negative preference optimization
+# scrub - teacher-student training, KL(teacher, student) + KL(student, teacher)
+# eco - corrupt prompt on the forget set with pretrained token and promptclassifier
+# eco_ft - pretrain on corrupted prompts from eco
+# LLMU - 
+# RMU - Representation Misdirection for Unlearning 
+# influence - 
+forget_loss: RMU
+# max_grad_norm: 
+loss_beta: 1.0
+# l1 and l0 regularization weights
+l1_lambda: 0.0
+l0_lambda: 0.0
+
+save_dir: ${model_path}/${forget_loss}_beta${loss_beta}_lr${lr}_${num_epochs}_L1${l1_lambda}_L0${l0_lambda}
+overwrite_dir: true
+weight_decay: 0.01
+eval_while_train: false
+save_ckpts: false
+save_model: true
+seed: 42
