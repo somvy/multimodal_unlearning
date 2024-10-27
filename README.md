@@ -1,3 +1,15 @@
+This repo contains experiments for the CLEAR  benchmark - Character Unlearning in Textual and Visual Modalities.
+It mearsures the effectiveness of unlearning methods in mutimodal setup. 
+
+For details check the [**Arxiv Paper**](https://arxiv.org/abs/2410.18057)
+
+Below are instructions for reproducing the experiments on multimodal model (LLAVA) - first finetuning the model on our dataset, then forgeting using different unlearning methods.
+
+For LLM unlearning run the same scripts from `nlp` folder. They are structured similarly as multimodal experiments.
+
+
+For CV only experiments, check out `cv` folder and `cv/README.md`
+
 ## Create environment
 (tested with python 3.10 ) 
 
@@ -64,17 +76,18 @@ Specify `model_path` with desired checkpoint to run
 
 ## Calculate metrics
 
-Important - to calculate "Forget Quality" metric we need "Gold" retain model, 
-so we need to finetune it and evaluate it earlier.
+**Important** - to calculate "Forget Quality" metric we need a "gold" retain model, 
+so we need to finetune and evaluate it. To do this, edit the config/mm/finetune.yaml again, change only the `split` field from "full" to "retainN"
+For example, if you are forgetting 10 percent, the "gold" model should be trained on retain90.  
 
-For example, if we are unlearning 10 percent, the "Gold" model should be trained on retain90 split 
+Finetune the "gold" model, then evaluate it. Remember, where the evaluation files were saved (usually `eval_reults` subfolder of model's folder).
+
 
 * Edit config/aggregate_eval_stat.yaml
 
 Change `retain_result` to `eval_log_aggregated.json` of gold retain model (this file is a result of evaluate step)
 
-Change `ckpt_result` to `eval_log_aggregated.json` of model, which you are 
-evaluating. 
+Change `ckpt_result` to `eval_log_aggregated.json` of model, which you are evaluating. 
 Change `method_name`, `submitted_by` and `save_file`
 Run - 
 
