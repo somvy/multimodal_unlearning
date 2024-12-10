@@ -261,6 +261,8 @@ class MMMixedForgetDataset(Dataset):
 
         if "idk" in self.return_pairs:
             forget_itm.update({self.answer_key: random.choice(self.idk_answers)})
+            # for captions probably need different "I dont know" choices than for textual QA
+            forget_itm.update({self.caption_key: random.choice(self.idk_answers)})
             res["idk"] = self._format_pair(forget_itm)
 
         return res
