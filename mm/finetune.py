@@ -30,6 +30,8 @@ def main(cfg):
     if os.environ.get("LOCAL_RANK") is not None:
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         device_map = {"": local_rank}
+    else:
+        device_map = "auto"
     set_seed(cfg.seed)
     model_cfg = get_model_identifiers_from_yaml(cfg.model_family)
     model_id = model_cfg["hf_key"]
