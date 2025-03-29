@@ -20,7 +20,7 @@ from mm.trainer_utils import (
 
 
 class MMTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, *args, **kwargs):
         # print("trainer: 19 inputs: ", inputs.keys())
         # print("trainer: 19 pixel_values: ", inputs["pixel_values"].shape)
         # print("trainer: 19 input_ids: ", inputs["input_ids"].shape)
@@ -166,7 +166,7 @@ class MMTrainerForgetting(Trainer):
     def to_device(device, inputs):
         return {k: v.to(device) for k, v in inputs.items()}
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, *args, **kwargs):
         model.device = next(model.parameters()).device
         retain_inputs = self.to_device(model.device, inputs["retain"])
 
