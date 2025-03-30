@@ -1,42 +1,30 @@
-import torch
-from transformers import Trainer, DataCollatorWithPadding
-from torch.utils.data import Dataset, SequentialSampler
-from typing import Dict, Optional, Sequence
 import inspect
-
-from torch.autograd import Variable
-from torch import nn
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
-
-import transformers
-from transformers.utils import logging, is_sagemaker_mp_enabled, is_torch_xla_available, is_accelerate_available
-from transformers.trainer_utils import has_length, speed_metrics, TrainOutput, HPSearchBackend
-from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
-from transformers.trainer_callback import TrainerState, ExportableState, CallbackHandler
-from transformers.trainer_pt_utils import get_model_param_count
-from transformers.integrations import deepspeed_init
-from transformers.training_args import OptimizerNames, TrainingArguments
-import shutil 
 import math
 import os
+import shutil
 import sys
 import time
-import accelerate
+from typing import Optional
+
+import torch
+from torch import nn
+from torch.utils.data import SequentialSampler
+from transformers import DataCollatorWithPadding, Trainer
+from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
+from transformers.integrations import deepspeed_init
+from transformers.trainer_callback import ExportableState, TrainerState
+from transformers.trainer_pt_utils import get_model_param_count
+from transformers.trainer_utils import HPSearchBackend, TrainOutput, has_length, speed_metrics
+from transformers.training_args import OptimizerNames
+from transformers.utils import is_accelerate_available, is_sagemaker_mp_enabled, is_torch_xla_available, logging
 
 PROJECTION_METHODS = ("grad_proj", "grad_proj_l2")
 
 
 if is_accelerate_available():
-    from accelerate import Accelerator, skip_first_batches
-    from accelerate import __version__ as accelerate_version
+    from accelerate import skip_first_batches
     from accelerate.utils import (
-        DistributedDataParallelKwargs,
         DistributedType,
-        GradientAccumulationPlugin,
-        load_fsdp_model,
-        load_fsdp_optimizer,
-        save_fsdp_model,
-        save_fsdp_optimizer,
     )
 
 
@@ -45,26 +33,24 @@ logger = logging.get_logger(__name__)
 
 class GradProjectionsTrainer(Trainer):
     def __init__(self, **kwargs):
-        self.forget_loss = kwargs.pop('forget_loss')
+        self.forget_loss = kwargs.pop("forget_loss")
         if self.forget_loss not in ("grad_proj_l2", "grad_proj"):
             raise ValueError(f"Invalid forget loss: {self.forget_loss}")
-        self.l2_grad_gamma = kwargs.pop('l2_grad_gamma')
+        self.l2_grad_gamma = kwargs.pop("l2_grad_gamma")
         super().__init__(**kwargs)
-
-
 
     def compute_loss(self, model, inputs, return_outputs=True):
         # if "factor" not in inputs.keys():
         #     return super().compute_loss(model, inputs, return_outputs)
 
-        positive_inputs, negative_inputs = inputs 
+        positive_inputs, negative_inputs = inputs
 
         if len(negative_inputs[0]) != 0:
-            #negative_inputs["input_ids"] = negative_inputs["input_ids"].reshape(negative_inputs["input_ids"].shape[0] * negative_inputs["input_ids"].shape[1])
-            #print('Negative inputs:')
-            #print(negative_inputs)
+            # negative_inputs["input_ids"] = negative_inputs["input_ids"].reshape(negative_inputs["input_ids"].shape[0] * negative_inputs["input_ids"].shape[1])
+            # print('Negative inputs:')
+            # print(negative_inputs)
             negative_input_ids, negative_labels, negative_attn = negative_inputs
-            #print(negative_inputs['input_ids'].shape)
+            # print(negative_inputs['input_ids'].shape)
             negative_outputs = model(input_ids=negative_input_ids, attention_mask=negative_attn, labels=negative_labels)
             # del negative_inputs
             negative_logits = negative_outputs.logits
@@ -76,26 +62,23 @@ class GradProjectionsTrainer(Trainer):
             # del negative_logits
             # del negative_labels
             # torch.cuda.empty_cache()
-            negative_loss = negative_loss_fct(
-                shift_logits_neg.reshape(-1, shift_logits_neg.size(-1)), shift_labels_neg.reshape(-1)
-            )
+            negative_loss = negative_loss_fct(shift_logits_neg.reshape(-1, shift_logits_neg.size(-1)), shift_labels_neg.reshape(-1))
             valid_counts_neg = (shift_labels_neg != -100).sum(dim=-1).float()
             negative_loss = negative_loss.view(shift_logits_neg.size(0), -1)
             # del shift_logits_neg
             # del shift_labels_neg
             # torch.cuda.empty_cache()
             negative_loss = negative_loss.sum(dim=-1) / valid_counts_neg
-            negative_loss = (negative_loss * -1.).mean()
+            negative_loss = (negative_loss * -1.0).mean()
             nf = True
         else:
-            negative_loss = 0.
+            negative_loss = 0.0
             nf = False
 
-
         if len(positive_inputs[0]) != 0:
-            #positive_inputs["input_ids"] = positive_inputs["input_ids"].reshape(positive_inputs["input_ids"].shape[0] * positive_inputs["input_ids"].shape[1])
-            #print('Positive inputs:')
-            #print(positive_inputs)
+            # positive_inputs["input_ids"] = positive_inputs["input_ids"].reshape(positive_inputs["input_ids"].shape[0] * positive_inputs["input_ids"].shape[1])
+            # print('Positive inputs:')
+            # print(positive_inputs)
             positive_input_ids, positive_labels, positive_attn = positive_inputs
             positive_outputs = model(input_ids=positive_input_ids, attention_mask=positive_attn, labels=positive_labels)
 
@@ -109,29 +92,24 @@ class GradProjectionsTrainer(Trainer):
             shift_labels_pos = positive_labels[..., 1:].contiguous()
             # del positive_labels
             # torch.cuda.empty_cache()
-            positive_loss = positive_loss_fct(
-                shift_logits_pos.reshape(-1, shift_logits_pos.size(-1)), shift_labels_pos.reshape(-1)
-            )
+            positive_loss = positive_loss_fct(shift_logits_pos.reshape(-1, shift_logits_pos.size(-1)), shift_labels_pos.reshape(-1))
             valid_counts_pos = (shift_labels_pos != -100).sum(dim=-1).float()
             positive_loss = positive_loss.view(shift_logits_pos.size(0), -1)
             # del shift_logits_pos
             # del shift_labels_pos
             # torch.cuda.empty_cache()
             positive_loss = positive_loss.sum(dim=-1) / valid_counts_pos
-            positive_loss = (positive_loss * 1.).mean()
+            positive_loss = (positive_loss * 1.0).mean()
             pf = True
 
         else:
-            positive_loss = 0.
+            positive_loss = 0.0
             pf = False
 
         loss = negative_loss + positive_loss
         return (loss, negative_loss, positive_loss, nf, pf) if return_outputs else loss
-    
 
-    def _inner_training_loop(
-        self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
-    ):
+    def _inner_training_loop(self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None):
         self.accelerator.free_memory()
         self._train_batch_size = batch_size
         if self.args.auto_find_batch_size:
@@ -170,16 +148,12 @@ class GradProjectionsTrainer(Trainer):
             num_examples = self.num_examples(train_dataloader)
             if args.max_steps > 0:
                 max_steps = args.max_steps
-                num_train_epochs = args.max_steps // num_update_steps_per_epoch + int(
-                    args.max_steps % num_update_steps_per_epoch > 0
-                )
+                num_train_epochs = args.max_steps // num_update_steps_per_epoch + int(args.max_steps % num_update_steps_per_epoch > 0)
                 # May be slightly incorrect if the last batch in the training dataloader has a smaller size but it's
                 # the best we can do.
                 num_train_samples = args.max_steps * total_train_batch_size
                 if args.include_tokens_per_second:
-                    num_train_tokens = (
-                        self.num_tokens(train_dataloader, args.max_steps) * args.gradient_accumulation_steps
-                    )
+                    num_train_tokens = self.num_tokens(train_dataloader, args.max_steps) * args.gradient_accumulation_steps
             else:
                 max_steps = math.ceil(args.num_train_epochs * num_update_steps_per_epoch)
                 num_train_epochs = math.ceil(args.num_train_epochs)
@@ -196,10 +170,7 @@ class GradProjectionsTrainer(Trainer):
             if args.include_tokens_per_second:
                 num_train_tokens = self.num_tokens(train_dataloader, args.max_steps) * args.gradient_accumulation_steps
         else:
-            raise ValueError(
-                "args.max_steps must be set to a positive value if dataloader does not have a length, was"
-                f" {args.max_steps}"
-            )
+            raise ValueError("args.max_steps must be set to a positive value if dataloader does not have a length, was" f" {args.max_steps}")
 
         if DebugOption.UNDERFLOW_OVERFLOW in self.args.debug:
             if self.args.n_gpu > 1:
@@ -226,9 +197,7 @@ class GradProjectionsTrainer(Trainer):
             self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
         self.state = TrainerState(
-            stateful_callbacks=[
-                cb for cb in self.callback_handler.callbacks + [self.control] if isinstance(cb, ExportableState)
-            ]
+            stateful_callbacks=[cb for cb in self.callback_handler.callbacks + [self.control] if isinstance(cb, ExportableState)]
         )
         self.state.is_hyper_param_search = trial is not None
         self.state.train_batch_size = self._train_batch_size
@@ -282,9 +251,7 @@ class GradProjectionsTrainer(Trainer):
                     model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
             else:
                 # to handle cases wherein we pass "DummyScheduler" such as when it is specified in DeepSpeed config.
-                model, self.optimizer, self.lr_scheduler = self.accelerator.prepare(
-                    self.model, self.optimizer, self.lr_scheduler
-                )
+                model, self.optimizer, self.lr_scheduler = self.accelerator.prepare(self.model, self.optimizer, self.lr_scheduler)
         elif self.args.optim in [OptimizerNames.LOMO, OptimizerNames.ADALOMO]:
             # In this case we are in DDP + LOMO, which should be supported
             self.optimizer = self.accelerator.prepare(self.optimizer)
@@ -303,9 +270,7 @@ class GradProjectionsTrainer(Trainer):
         # ckpt loading
         if resume_from_checkpoint is not None:
             if self.is_deepspeed_enabled:
-                deepspeed_load_checkpoint(
-                    self.model_wrapped, resume_from_checkpoint, load_module_strict=not _is_peft_model(self.model)
-                )
+                deepspeed_load_checkpoint(self.model_wrapped, resume_from_checkpoint, load_module_strict=not _is_peft_model(self.model))
             elif is_sagemaker_mp_enabled() or self.is_fsdp_enabled:
                 self._load_from_checkpoint(resume_from_checkpoint, self.model_wrapped)
 
@@ -336,9 +301,7 @@ class GradProjectionsTrainer(Trainer):
         steps_trained_progress_bar = None
 
         # Check if continuing training from a checkpoint
-        if resume_from_checkpoint is not None and os.path.isfile(
-            os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)
-        ):
+        if resume_from_checkpoint is not None and os.path.isfile(os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)):
             self.state = TrainerState.load_from_json(os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME))
             self.compare_trainer_and_checkpoint_args(self.args, self.state)
             self._load_callback_state()
@@ -354,8 +317,7 @@ class GradProjectionsTrainer(Trainer):
             logger.info(f"  Continuing training from global step {self.state.global_step}")
             if not args.ignore_data_skip:
                 logger.info(
-                    f"  Will skip the first {epochs_trained} epochs then the first"
-                    f" {steps_trained_in_current_epoch} batches in the first epoch."
+                    f"  Will skip the first {epochs_trained} epochs then the first" f" {steps_trained_in_current_epoch} batches in the first epoch."
                 )
 
         # Update the references
@@ -388,8 +350,6 @@ class GradProjectionsTrainer(Trainer):
         grad_norm: Optional[float] = None
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
-
-
         total_batched_samples = 0
         for epoch in range(epochs_trained, num_train_epochs):
             epoch_iterator = train_dataloader
@@ -400,11 +360,7 @@ class GradProjectionsTrainer(Trainer):
             if args.past_index >= 0:
                 self._past = None
 
-            steps_in_epoch = (
-                len(epoch_iterator)
-                if len_dataloader is not None
-                else args.max_steps * args.gradient_accumulation_steps
-            )
+            steps_in_epoch = len(epoch_iterator) if len_dataloader is not None else args.max_steps * args.gradient_accumulation_steps
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
 
             if epoch == epochs_trained and resume_from_checkpoint is not None and steps_trained_in_current_epoch == 0:
@@ -420,12 +376,11 @@ class GradProjectionsTrainer(Trainer):
 
             step = -1
             grads = {}
-            grads['neg'] = {}
-            grads['pos'] = {}
+            grads["neg"] = {}
+            grads["pos"] = {}
             nc = 0
             pc = 0
             for step, inputs in enumerate(epoch_iterator):
-                
                 total_batched_samples += 1
 
                 if self.args.include_num_input_tokens_seen:
@@ -439,9 +394,7 @@ class GradProjectionsTrainer(Trainer):
                     else:
                         input_device = inputs[main_input_name].device
                         self.state.num_input_tokens_seen += torch.sum(
-                            self.accelerator.gather(
-                                torch.tensor(inputs[main_input_name].numel(), device=input_device, dtype=torch.int64)
-                            )
+                            self.accelerator.gather(torch.tensor(inputs[main_input_name].numel(), device=input_device, dtype=torch.int64))
                         ).item()
                 if rng_to_sync:
                     self._load_rng_state(resume_from_checkpoint)
@@ -465,11 +418,7 @@ class GradProjectionsTrainer(Trainer):
                 with self.accelerator.accumulate(model):
                     tr_loss_step, grads, nc, pc = self.training_step(model, inputs, grads, nc, pc)
 
-                if (
-                    args.logging_nan_inf_filter
-                    and not is_torch_xla_available()
-                    and (torch.isnan(tr_loss_step) or torch.isinf(tr_loss_step))
-                ):
+                if args.logging_nan_inf_filter and not is_torch_xla_available() and (torch.isnan(tr_loss_step) or torch.isinf(tr_loss_step)):
                     # if loss is nan or inf simply add the average of previous logged losses
                     tr_loss += tr_loss / (1 + self.state.global_step - self._globalstep_last_logged)
                 else:
@@ -481,9 +430,7 @@ class GradProjectionsTrainer(Trainer):
 
                 self.current_flos += float(self.floating_point_ops(inputs))
 
-                is_last_step_and_steps_less_than_grad_acc = (
-                    steps_in_epoch <= args.gradient_accumulation_steps and (step + 1) == steps_in_epoch
-                )
+                is_last_step_and_steps_less_than_grad_acc = steps_in_epoch <= args.gradient_accumulation_steps and (step + 1) == steps_in_epoch
 
                 if (
                     total_batched_samples % args.gradient_accumulation_steps == 0
@@ -514,10 +461,7 @@ class GradProjectionsTrainer(Trainer):
                                 args.max_grad_norm,
                             )
 
-                        if (
-                            is_accelerate_available()
-                            and self.accelerator.distributed_type == DistributedType.DEEPSPEED
-                        ):
+                        if is_accelerate_available() and self.accelerator.distributed_type == DistributedType.DEEPSPEED:
                             grad_norm = model.get_global_grad_norm()
                             # In some cases the grad norm may not return a float
                             if hasattr(grad_norm, "item"):
@@ -527,20 +471,19 @@ class GradProjectionsTrainer(Trainer):
 
                     # self.optimizer.step()
 
-
-                    ############################################################################################## 
+                    ##############################################################################################
                     # print(grads["neg"])
-                    for idx in grads['neg'].keys():
-                        grads['neg'][idx] /= nc
+                    for idx in grads["neg"].keys():
+                        grads["neg"][idx] /= nc
 
-                    for idx in grads['pos'].keys():
-                        grads['pos'][idx] /= pc
+                    for idx in grads["pos"].keys():
+                        grads["pos"][idx] /= pc
 
                     if self.forget_loss == "grad_proj":
                         for idx, param in enumerate(model.parameters()):
                             if param.grad is not None and param.requires_grad:
-                                pos_grad = grads['pos'][idx].to(param.grad.data.device)
-                                neg_grad = grads['neg'][idx].to(param.grad.data.device)
+                                pos_grad = grads["pos"][idx].to(param.grad.data.device)
+                                neg_grad = grads["neg"][idx].to(param.grad.data.device)
                                 inner_product = torch.dot(torch.flatten(neg_grad), torch.flatten(pos_grad))
                                 coef = inner_product / torch.norm(pos_grad) ** 2
 
@@ -548,23 +491,22 @@ class GradProjectionsTrainer(Trainer):
                                 param.grad.data = new_grad
 
                     elif self.forget_loss == "grad_proj_l2":
-                        new_loss = torch.tensor(0., requires_grad=True).to(tr_loss.device)
+                        new_loss = torch.tensor(0.0, requires_grad=True).to(tr_loss.device)
                         # new_loss = tr_loss
                         for idx, param in enumerate(model.parameters()):
                             if param.grad is not None and param.requires_grad:
-                                pos_grad = grads['pos'][idx]#.to(param.grad.data.device)
-                                neg_grad = grads['neg'][idx]#.to(param.grad.data.device)
+                                pos_grad = grads["pos"][idx]  # .to(param.grad.data.device)
+                                neg_grad = grads["neg"][idx]  # .to(param.grad.data.device)
                                 grad_diff = ((neg_grad - pos_grad) ** 2).sum()
 
                                 # print(neg_grad.grad)
-                                new_loss +=  self.l2_grad_gamma * grad_diff
+                                new_loss += self.l2_grad_gamma * grad_diff
 
                         # print(new_loss, self.l2_grad_gamma)
                         new_loss.backward(retain_graph=True)
 
                     ##############################################################################################
                     self.optimizer.step()
-
 
                     # self.control = self.callback_handler.on_optimizer_step(args, self.state, self.control)
 
@@ -576,8 +518,8 @@ class GradProjectionsTrainer(Trainer):
 
                     model.zero_grad()
                     grads = {}
-                    grads['neg'] = {}
-                    grads['pos'] = {}
+                    grads["neg"] = {}
+                    grads["pos"] = {}
                     nc = 0
                     pc = 0
                     self.state.global_step += 1
@@ -596,13 +538,11 @@ class GradProjectionsTrainer(Trainer):
                         xm.mark_step()
                     break
 
-            
             # torch.cuda.empty_cache()
             # del grads
 
             # self.optimizer.step()
-            
-            
+
             if step < 0:
                 logger.warning(
                     "There seems to be not a single sample in your epoch_iterator, stopping training at step"
@@ -686,8 +626,6 @@ class GradProjectionsTrainer(Trainer):
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
 
-
- 
     def training_step(self, model, inputs, grads, pc, nc):
         """
         Perform a training step on a batch of inputs.
@@ -722,7 +660,6 @@ class GradProjectionsTrainer(Trainer):
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-                       
         if nf:
             self.optimizer.zero_grad()
             model.zero_grad()
@@ -739,47 +676,44 @@ class GradProjectionsTrainer(Trainer):
             for idx, param in enumerate(model.parameters()):
                 if param.grad is not None and param.requires_grad:
                     if self.forget_loss == "grad_proj":
-                        if idx not in grads['neg']:
-                            grads['neg'][idx] = param.grad.data.detach().clone().cpu().to(param.grad.data.dtype)
+                        if idx not in grads["neg"]:
+                            grads["neg"][idx] = param.grad.data.detach().clone().cpu().to(param.grad.data.dtype)
                         else:
-                            grads['neg'][idx] += param.grad.data.detach().clone().cpu().to(param.grad.data.dtype)
+                            grads["neg"][idx] += param.grad.data.detach().clone().cpu().to(param.grad.data.dtype)
 
                     elif self.forget_loss == "grad_proj_l2":
-                        if idx not in grads['neg']:
-                            grads['neg'][idx] = param.grad
+                        if idx not in grads["neg"]:
+                            grads["neg"][idx] = param.grad
                         else:
-                            grads['neg'][idx] += param.grad
+                            grads["neg"][idx] += param.grad
                     else:
                         raise ValueError(f"Invalid forget loss: {self.forget_loss}")
             # torch.cuda.empty_cache()
 
-
-        if pf:            
+        if pf:
             self.optimizer.zero_grad()
             model.zero_grad()
             if self.accelerator.distributed_type == DistributedType.DEEPSPEED:
-               self.accelerator.deepspeed_engine.backward(positive_loss, **kwargs)
+                self.accelerator.deepspeed_engine.backward(positive_loss, **kwargs)
             elif self.accelerator.scaler is not None:
-              self.accelerator.scaler.scale(positive_loss).backward(**kwargs)
+                self.accelerator.scaler.scale(positive_loss).backward(**kwargs)
             else:
-               positive_loss.backward(**kwargs)
-
-
+                positive_loss.backward(**kwargs)
 
             pc += 1
             for idx, param in enumerate(model.parameters()):
                 if param.grad is not None and param.requires_grad:
                     if self.forget_loss == "grad_proj":
-                        if idx not in grads['pos']:
-                            grads['pos'][idx] = param.grad.data.detach().clone().cpu().to(param.grad.data.dtype)
+                        if idx not in grads["pos"]:
+                            grads["pos"][idx] = param.grad.data.detach().clone().cpu().to(param.grad.data.dtype)
                         else:
-                            grads['pos'][idx] += param.grad.data.detach().clone().cpu().to(param.grad.data.dtype)
+                            grads["pos"][idx] += param.grad.data.detach().clone().cpu().to(param.grad.data.dtype)
 
                     elif self.forget_loss == "grad_proj_l2":
-                        if idx not in grads['pos']:
-                            grads['pos'][idx] = param.grad
+                        if idx not in grads["pos"]:
+                            grads["pos"][idx] = param.grad
                         else:
-                            grads['pos'][idx] += param.grad
+                            grads["pos"][idx] += param.grad
                     else:
                         raise ValueError(f"Invalid forget loss: {self.forget_loss}")
 
@@ -787,10 +721,9 @@ class GradProjectionsTrainer(Trainer):
         torch.cuda.empty_cache()
         return loss.detach() / self.args.gradient_accumulation_steps, grads, nc, pc
 
-
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
         return SequentialSampler(self.train_dataset)
-    
+
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
             # Inspect model forward signature to keep only the arguments it accepts.
@@ -798,13 +731,13 @@ class GradProjectionsTrainer(Trainer):
             self._signature_columns = list(signature.parameters.keys())
             # Labels may be named label or label_ids, the default data collator handles that.
             self._signature_columns += list(set(["label", "label_ids"] + self.label_names))
-            self._signature_columns.append('factor')
+            self._signature_columns.append("factor")
 
 
 class AscentPlusDescentDataCollator(DataCollatorWithPadding):
     def __call__(self, features):
         batch = super().__call__(features)
-        #print([f["factor"] for f in features])
+        # print([f["factor"] for f in features])
         if "factor" in features[0].keys():
             batch["factor"] = torch.tensor([f["factor"] for f in features])
         return batch

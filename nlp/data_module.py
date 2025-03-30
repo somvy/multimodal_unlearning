@@ -1,14 +1,13 @@
+import datasets
 import torch
 from torch import nn
-from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
-import datasets
-from utils import get_model_identifiers_from_yaml, add_dataset_index
+from torch.utils.data import Dataset
+
+from utils import add_dataset_index, get_model_identifiers_from_yaml
 
 
-def convert_raw_data_to_model_format(
-    tokenizer, max_length, question, answer, model_configs
-):
+def convert_raw_data_to_model_format(tokenizer, max_length, question, answer, model_configs):
     question_start_token, question_end_token, answer_token = (
         model_configs["question_start_tag"],
         model_configs["question_end_tag"],
@@ -31,9 +30,7 @@ def convert_raw_data_to_model_format(
     if len(encoded.input_ids) == max_length:
         label = encoded.input_ids
     else:
-        label = (
-            encoded["input_ids"] + [tokenizer.eos_token_id] + [-100] * (pad_length - 1)
-        )
+        label = encoded["input_ids"] + [tokenizer.eos_token_id] + [-100] * (pad_length - 1)
 
     # change label to -100 for question tokens
     for i in range(num_question_tokens):
@@ -83,12 +80,7 @@ class TextForgetDatasetQA(Dataset):
         for data_type in [self.split1, self.split2]:
             # use questions from forget set if split is idk or forget
             data = self.retain_data if data_type == "retain" else self.forget_data
-            idx = (
-                idx
-                if data_type != "retain"
-                else (idx + torch.randint(0, len(self.retain_data), (1,)).item())
-                % len(self.retain_data)
-            )
+            idx = idx if data_type != "retain" else (idx + torch.randint(0, len(self.retain_data), (1,)).item()) % len(self.retain_data)
             question = data[idx]["question"]
             answer = data[idx]["answer"]
 
@@ -97,17 +89,13 @@ class TextForgetDatasetQA(Dataset):
                 rand_pos = torch.randint(0, len(self.idk), (1,)).item()
                 answer = self.idk[rand_pos].strip()
 
-            converted_data = convert_raw_data_to_model_format(
-                self.tokenizer, self.max_length, question, answer, self.model_configs
-            )
+            converted_data = convert_raw_data_to_model_format(self.tokenizer, self.max_length, question, answer, self.model_configs)
             rets.append(converted_data)
         return rets
 
 
 class TextForgetDatasetDPOQA(Dataset):
-    def __init__(
-        self, data_path, tokenizer, model_family, max_length=512, split="forget10"
-    ):
+    def __init__(self, data_path, tokenizer, model_family, max_length=512, split="forget10"):
         super(TextForgetDatasetDPOQA, self).__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -126,12 +114,7 @@ class TextForgetDatasetDPOQA(Dataset):
 
         for data_type in ["idk", "forget", "retain"]:
             data = self.forget_data if data_type != "retain" else self.retain_data
-            idx = (
-                idx
-                if data_type != "retain"
-                else (idx + torch.randint(0, len(self.retain_data), (1,)).item())
-                % len(self.retain_data)
-            )
+            idx = idx if data_type != "retain" else (idx + torch.randint(0, len(self.retain_data), (1,)).item()) % len(self.retain_data)
 
             question = data[idx]["question"]
 
@@ -142,9 +125,7 @@ class TextForgetDatasetDPOQA(Dataset):
                 rand_pos = torch.randint(0, len(self.idk), (1,)).item()
                 answer = self.idk[rand_pos].strip()
 
-            converted_data = convert_raw_data_to_model_format(
-                self.tokenizer, self.max_length, question, answer, self.model_configs
-            )
+            converted_data = convert_raw_data_to_model_format(self.tokenizer, self.max_length, question, answer, self.model_configs)
             rets.append(converted_data)
         return rets
 
@@ -194,9 +175,7 @@ class TextDatasetQA(Dataset):
         pad_attention_mask_list = []
 
         for answer in answers:
-            converted_data = convert_raw_data_to_model_format(
-                self.tokenizer, self.max_length, question, answer, self.model_configs
-            )
+            converted_data = convert_raw_data_to_model_format(self.tokenizer, self.max_length, question, answer, self.model_configs)
             pad_input_ids_list.append(converted_data[0])
             label_list.append(converted_data[1])
             pad_attention_mask_list.append(converted_data[2])

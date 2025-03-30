@@ -1,15 +1,15 @@
-from data_module import TextDatasetQA, custom_data_collator
-from dataloader import CustomTrainer
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, set_seed
-from unsloth import FastLanguageModel
+import os
+from pathlib import Path
 
 import hydra
+import torch
 import transformers
-import os
-from peft import LoraConfig, get_peft_model
-from pathlib import Path
+from data_module import TextDatasetQA, custom_data_collator
+from dataloader import CustomTrainer
 from omegaconf import OmegaConf
+from transformers import set_seed
+from unsloth import FastLanguageModel
+
 from utils import get_model_identifiers_from_yaml
 
 
@@ -35,9 +35,7 @@ def print_trainable_parameters(model):
         all_param += param.numel()
         if param.requires_grad:
             trainable_params += param.numel()
-    print(
-        f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
-    )
+    print(f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}")
 
 
 @hydra.main(version_base=None, config_path="../config/nlp", config_name="finetune")
@@ -56,7 +54,6 @@ def main(cfg):
     if os.environ.get("LOCAL_RANK") is None or local_rank == 0:
         with open(f"{cfg.save_dir}/cfg.yaml", "w") as f:
             OmegaConf.save(cfg, f)
-
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_id,
@@ -85,9 +82,7 @@ def main(cfg):
     num_devices = int(os.environ.get("WORLD_SIZE", 1))
     print(f"num_devices: {num_devices}")
 
-    max_steps = int(cfg.num_epochs * len(torch_format_dataset)) // (
-        batch_size * gradient_accumulation_steps * num_devices
-    )
+    max_steps = int(cfg.num_epochs * len(torch_format_dataset)) // (batch_size * gradient_accumulation_steps * num_devices)
     # max_steps=5
     print(f"max_steps: {max_steps}")
     training_args = transformers.TrainingArguments(
@@ -119,11 +114,11 @@ def main(cfg):
     if cfg.LoRA.r != 0:
         model = FastLanguageModel.get_peft_model(
             model,
-            r = cfg.LoRA.r,
-            target_modules = find_all_linear_names(model),
-            lora_alpha = cfg.LoRA.alpha,
-            lora_dropout = cfg.LoRA.dropout,
-            bias = "none",
+            r=cfg.LoRA.r,
+            target_modules=find_all_linear_names(model),
+            lora_alpha=cfg.LoRA.alpha,
+            lora_dropout=cfg.LoRA.dropout,
+            bias="none",
             # task_type = "CAUSAL_LM",
             # use_gradient_checkpointing = "unsloth",
         )
@@ -139,9 +134,7 @@ def main(cfg):
         args=training_args,
         data_collator=custom_data_collator,
     )
-    model.config.use_cache = (
-        False  # silence the warnings. Please re-enable for inference!
-    )
+    model.config.use_cache = False  # silence the warnings. Please re-enable for inference!
     trainer.train()
 
     # save the model

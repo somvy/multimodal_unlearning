@@ -1,26 +1,26 @@
-from data_module import TextForgetDatasetQA, TextForgetDatasetDPOQA
+import os
+import re
+from pathlib import Path
+
+import hydra
+import torch
+import transformers
+from data_module import TextForgetDatasetDPOQA, TextForgetDatasetQA
 from dataloader import (
     CustomTrainerForgetting,
     custom_data_collator_forget,
     loss_needs_oracle,
 )
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, set_seed
-from pathlib import Path
-import hydra
-import transformers
-import re
 from dotenv import load_dotenv
+from omegaconf import OmegaConf
+from peft import LoraConfig, PeftModel, get_peft_model
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, set_seed
 
-import os
-from peft import LoraConfig, get_peft_model, PeftModel
-from pathlib import Path
 from utils import (
-    get_model_identifiers_from_yaml,
     find_all_linear_names,
+    get_model_identifiers_from_yaml,
     print_trainable_parameters,
 )
-from omegaconf import OmegaConf
 
 
 @hydra.main(version_base=None, config_path="../config/nlp", config_name="forget")
@@ -79,21 +79,15 @@ def main(cfg):
         )
     batch_size = cfg.batch_size
     gradient_accumulation_steps = cfg.gradient_accumulation_steps
-    steps_per_epoch = len(torch_format_dataset) // (
-        batch_size * gradient_accumulation_steps * num_devices
-    )
-    max_steps = int(cfg.num_epochs * len(torch_format_dataset)) // (
-        batch_size * gradient_accumulation_steps * num_devices
-    )
+    steps_per_epoch = len(torch_format_dataset) // (batch_size * gradient_accumulation_steps * num_devices)
+    max_steps = int(cfg.num_epochs * len(torch_format_dataset)) // (batch_size * gradient_accumulation_steps * num_devices)
     print(f"max_steps: {max_steps}")
 
     # first get the base model architecture
     # if there is a pytorch*.bin file in the model path, then load that. use regex there can be anythign in between pytorch and .bin
     # check that folder contatins a pytorch model
     path_found = any(
-        re.search("pytorch.*\.bin", file.name)
-        or re.search("model-*\.safetensors", file.name)
-        for file in Path(cfg.model_path).glob("*")
+        re.search("pytorch.*\.bin", file.name) or re.search("model-*\.safetensors", file.name) for file in Path(cfg.model_path).glob("*")
     )
 
     oracle_model = None
@@ -111,11 +105,7 @@ def main(cfg):
         )
         # model, tokenizer = FastLanguageModel.from_pretrained(cfg.model_path, tokenizer=tokenizer, trust_remote_code = True, dtype=torch.bfloat16, load_in_4bit=False)
 
-        if (
-            cfg.l1_lambda != 0
-            or cfg.l0_lambda != 0
-            or loss_needs_oracle(cfg.forget_loss)
-        ):
+        if cfg.l1_lambda != 0 or cfg.l0_lambda != 0 or loss_needs_oracle(cfg.forget_loss):
             oracle_model = AutoModelForCausalLM.from_pretrained(
                 cfg.model_path,
                 config=config,

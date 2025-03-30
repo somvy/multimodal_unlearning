@@ -1,21 +1,23 @@
-from tqdm import tqdm
+import json
+import os
+from pathlib import Path
+
+import evaluate
+import hydra
+import numpy as np
+import torch
+import torch.nn as nn
 from data_module import (
     TextDatasetQA,
-    custom_data_collator,
-    get_batch_loss,
     custom_data_collator_with_indices,
+    get_batch_loss,
 )
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
-import os, hydra
-import evaluate
-import json
-from pathlib import Path
 from rouge_score import rouge_scorer
-from utils import get_model_identifiers_from_yaml, get_model_utility, get_forget_quality
-import torch.nn as nn
-import csv
-import numpy as np
+from tqdm import tqdm
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+
+from utils import get_model_identifiers_from_yaml
+
 # from eco.main import get_eco_model
 
 
@@ -72,26 +74,18 @@ def eval_perturbation_ratio(eval_dataloader, perturb_dataloader, model, tokenize
             perturb_batch[k] = v.to(model.device)
 
         if cfg.model_family == "llama2-7b-eco":
-            batch["prompts"] = tokenizer.batch_decode(
-                batch["input_ids"], skip_special_tokens=True
-            )
-            perturb_batch["prompts"] = tokenizer.batch_decode(
-                perturb_batch["input_ids"], skip_special_tokens=True
-            )
+            batch["prompts"] = tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=True)
+            perturb_batch["prompts"] = tokenizer.batch_decode(perturb_batch["input_ids"], skip_special_tokens=True)
 
         with torch.no_grad():
             outputs = model(**batch)
             perturb_outputs = model(**perturb_batch)
 
         gt_loss = get_batch_loss(outputs.logits, batch["labels"])
-        perturb_loss = get_batch_loss(
-            perturb_outputs.logits, perturb_batch["labels"]
-        ).view(bsz, seq_len)
+        perturb_loss = get_batch_loss(perturb_outputs.logits, perturb_batch["labels"]).view(bsz, seq_len)
 
         num_token_gt = (batch["labels"] != -100).sum(-1)
-        num_token_perturb = (
-            (perturb_batch["labels"] != -100).view(bsz, seq_len, -1).sum(-1)
-        )
+        num_token_perturb = (perturb_batch["labels"] != -100).view(bsz, seq_len, -1).sum(-1)
 
         mean_perturb_loss = perturb_loss.mean(dim=1)
 
@@ -114,28 +108,12 @@ def eval_perturbation_ratio(eval_dataloader, perturb_dataloader, model, tokenize
                 perturb_loss_per_token.cpu().numpy().tolist(),
             )
         )
-        gt_loss_per_token = dict(
-            zip(
-                indices.cpu().numpy().tolist(), gt_loss_per_token.cpu().numpy().tolist()
-            )
-        )
-        truth_ratio = dict(
-            zip(indices.cpu().numpy().tolist(), truth_ratio.cpu().numpy().tolist())
-        )
-        gt_loss = dict(
-            zip(indices.cpu().numpy().tolist(), gt_loss.cpu().numpy().tolist())
-        )
-        perturb_loss = dict(
-            zip(indices.cpu().numpy().tolist(), perturb_loss.cpu().numpy().tolist())
-        )
-        num_token_gt = dict(
-            zip(indices.cpu().numpy().tolist(), num_token_gt.cpu().numpy().tolist())
-        )
-        num_token_perturb = dict(
-            zip(
-                indices.cpu().numpy().tolist(), num_token_perturb.cpu().numpy().tolist()
-            )
-        )
+        gt_loss_per_token = dict(zip(indices.cpu().numpy().tolist(), gt_loss_per_token.cpu().numpy().tolist()))
+        truth_ratio = dict(zip(indices.cpu().numpy().tolist(), truth_ratio.cpu().numpy().tolist()))
+        gt_loss = dict(zip(indices.cpu().numpy().tolist(), gt_loss.cpu().numpy().tolist()))
+        perturb_loss = dict(zip(indices.cpu().numpy().tolist(), perturb_loss.cpu().numpy().tolist()))
+        num_token_gt = dict(zip(indices.cpu().numpy().tolist(), num_token_gt.cpu().numpy().tolist()))
+        num_token_perturb = dict(zip(indices.cpu().numpy().tolist(), num_token_perturb.cpu().numpy().tolist()))
 
         # merge dicts
 
@@ -168,9 +146,7 @@ def eval_perturbation_ratio(eval_dataloader, perturb_dataloader, model, tokenize
 def run_generation(cfg, batch, model, tokenizer):
     input_ids = batch["input_ids"]
     input_strings = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
-    split_symbol = (
-        " [/INST]" if cfg.model_family.startswith("llama2-7b") else "Answer: "
-    )
+    split_symbol = " [/INST]" if cfg.model_family.startswith("llama2-7b") else "Answer: "
     ground_truth = [s.split(split_symbol)[1] for s in input_strings]
     input_strings = [s.split(split_symbol)[0] for s in input_strings]
     # add ["/INST "] to the end of each string
@@ -190,9 +166,7 @@ def run_generation(cfg, batch, model, tokenizer):
     left_pad_tokenizer.pad_token = left_pad_tokenizer.eos_token
     left_pad_tokenizer.pad_token_id = left_pad_tokenizer.eos_token_id
 
-    inputs = left_pad_tokenizer.batch_encode_plus(
-        input_strings, add_special_tokens=True, return_tensors="pt", padding=True
-    ).to(model.device)
+    inputs = left_pad_tokenizer.batch_encode_plus(input_strings, add_special_tokens=True, return_tensors="pt", padding=True).to(model.device)
     # print("####################")
     # print("prompts: ", input_strings)
     generate_kwargs = dict(
@@ -207,9 +181,7 @@ def run_generation(cfg, batch, model, tokenizer):
     if cfg.model_family == "llama2-7b-eco":
         generate_kwargs["prompts"] = input_strings
     out = model.generate(**generate_kwargs)
-    strs = left_pad_tokenizer.batch_decode(
-        out[:, inputs.input_ids.shape[-1] :], skip_special_tokens=True
-    )
+    strs = left_pad_tokenizer.batch_decode(out[:, inputs.input_ids.shape[-1] :], skip_special_tokens=True)
     return input_strings, strs, ground_truth
 
 
@@ -254,15 +226,9 @@ def get_dataloader(
     )
 
     if cfg.ds_size:
-        torch_format_dataset.data = torch_format_dataset.data.select(
-            range(min(cfg.ds_size, len(torch_format_dataset.data)))
-        )
-        base_torch_format_dataset.data = base_torch_format_dataset.data.select(
-            range(min(cfg.ds_size, len(base_torch_format_dataset.data)))
-        )
-        perturb_torch_format_dataset.data = perturb_torch_format_dataset.data.select(
-            range(min(cfg.ds_size, len(perturb_torch_format_dataset.data)))
-        )
+        torch_format_dataset.data = torch_format_dataset.data.select(range(min(cfg.ds_size, len(torch_format_dataset.data))))
+        base_torch_format_dataset.data = base_torch_format_dataset.data.select(range(min(cfg.ds_size, len(base_torch_format_dataset.data))))
+        perturb_torch_format_dataset.data = perturb_torch_format_dataset.data.select(range(min(cfg.ds_size, len(perturb_torch_format_dataset.data))))
 
     eval_dataloader = torch.utils.data.DataLoader(
         torch_format_dataset,
@@ -313,15 +279,11 @@ def get_all_evals(
             batch[k] = v.to(model.device)
 
         if cfg.model_family == "llama2-7b-eco":
-            batch["prompts"] = tokenizer.batch_decode(
-                batch["input_ids"], skip_special_tokens=True
-            )
+            batch["prompts"] = tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=True)
 
         with torch.no_grad():
             outputs = model(**batch)
-            input_string, gen_output, gt = run_generation(
-                cfg, batch, model, tokenizer=tokenizer
-            )
+            input_string, gen_output, gt = run_generation(cfg, batch, model, tokenizer=tokenizer)
             gen_outputs.extend(gen_output)
             ground_truths.extend(gt)
             input_strings.extend(input_string)
@@ -347,24 +309,12 @@ def get_all_evals(
                 )
             )
         )
-        eval_logs["gt_loss"].update(
-            dict(zip(indices.cpu().numpy().tolist(), gt_loss.cpu().numpy().tolist()))
-        )
-        eval_logs["num_token_gt"].update(
-            dict(
-                zip(indices.cpu().numpy().tolist(), num_token_gt.cpu().numpy().tolist())
-            )
-        )
-        eval_logs["generated_text"].update(
-            dict(zip(indices.cpu().numpy().tolist(), zip(input_string, gen_output, gt)))
-        )
+        eval_logs["gt_loss"].update(dict(zip(indices.cpu().numpy().tolist(), gt_loss.cpu().numpy().tolist())))
+        eval_logs["num_token_gt"].update(dict(zip(indices.cpu().numpy().tolist(), num_token_gt.cpu().numpy().tolist())))
+        eval_logs["generated_text"].update(dict(zip(indices.cpu().numpy().tolist(), zip(input_string, gen_output, gt))))
 
     eval_logs.update(eval_rouge_recall(gen_outputs, ground_truths, all_indices))
-    eval_logs.update(
-        eval_perturbation_ratio(
-            base_eval_dataloader, perturb_dataloader, model, tokenizer, cfg
-        )
-    )
+    eval_logs.update(eval_perturbation_ratio(base_eval_dataloader, perturb_dataloader, model, tokenizer, cfg))
 
     if normalize_gt:
         avg_gt_loss = eval_logs["avg_gt_loss"]
@@ -383,9 +333,7 @@ def get_all_evals(
     return eval_logs
 
 
-@hydra.main(
-    version_base=None, config_path="../config/nlp", config_name="eval_everything"
-)
+@hydra.main(version_base=None, config_path="../config/nlp", config_name="eval_everything")
 def main(cfg):
     assert (
         len(cfg.data_path)
@@ -483,13 +431,7 @@ def main(cfg):
         world_size = int(os.environ.get("WORLD_SIZE", "1"))
         print(f"Working on eval task {eval_task} with split {split}")
         save_filename = os.path.join(cfg.save_dir, f"{eval_task}.json")
-        save_filename = (
-            save_filename
-            if world_size == 1
-            else os.path.join(
-                cfg.save_dir, f"{eval_task}_{os.environ.get('LOCAL_RANK', '0')}.json"
-            )
-        )
+        save_filename = save_filename if world_size == 1 else os.path.join(cfg.save_dir, f"{eval_task}_{os.environ.get('LOCAL_RANK', '0')}.json")
 
         if os.path.exists(save_filename) and not cfg.overwrite:
             print(f"Skipping {eval_task} because {save_filename} already exists")
@@ -527,14 +469,11 @@ def main(cfg):
 
         aggregated_eval_logs[f"{eval_task}.json"] = eval_logs
 
-    aggregated_eval_log_filename = os.path.join(
-        cfg.save_dir, "eval_log_aggregated.json"
-    )
+    aggregated_eval_log_filename = os.path.join(cfg.save_dir, "eval_log_aggregated.json")
 
     with open(aggregated_eval_log_filename, "w") as f:
         # pretty write json to f
         json.dump(aggregated_eval_logs, f, indent=4)
-
 
 
 def eval_bleu(gen_outputs, ground_truths):

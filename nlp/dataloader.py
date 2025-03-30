@@ -1,22 +1,11 @@
+import copy
+
+import deepspeed
 import torch
+import torch.nn.functional as F
+from data_module import get_batch_loss
 from torch import nn
 from transformers import Trainer
-import torch.nn.functional as F
-import copy, os
-import deepspeed
-import copy
-import json
-from pathlib import Path
-from data_module import get_batch_loss
-import numpy as np
-from peft import PeftModel
-from torch.distributions import Categorical
-import csv
-from transformers.integrations.deepspeed import (
-    deepspeed_init,
-    deepspeed_load_checkpoint,
-    is_deepspeed_available,
-)
 
 
 def printll(name, inp):
@@ -44,10 +33,7 @@ def forward_with_cache(model, inputs, module, no_grad=True):
         return None
 
     hook_handle = module.register_forward_hook(hook)
-    inputs = {
-        k: v.to(model.device)
-        for k, v in zip(["input_ids", "labels", "attention_mask"], inputs)
-    }
+    inputs = {k: v.to(model.device) for k, v in zip(["input_ids", "labels", "attention_mask"], inputs)}
 
     if no_grad:
         with torch.no_grad():
@@ -95,9 +81,7 @@ class CustomTrainer(Trainer):
 
         return (loss, outputs) if return_outputs else loss
 
-    def prediction_step(
-        self, model, inputs, prediction_loss_only: bool, ignore_keys=None
-    ):
+    def prediction_step(self, model, inputs, prediction_loss_only: bool, ignore_keys=None):
         input_ids, labels, attention_mask = inputs
         # forward pass
         with torch.no_grad():
@@ -116,11 +100,7 @@ class CustomTrainerForgetting(Trainer):
         self.l0_lambda = kwargs.pop("l0_lambda")
 
         super(CustomTrainerForgetting, self).__init__(*args, **kwargs)
-        if (
-            loss_needs_oracle(self.loss_type)
-            or self.l1_lambda != 0
-            or self.l0_lambda != 0
-        ) and self.is_deepspeed_enabled:
+        if (loss_needs_oracle(self.loss_type) or self.l1_lambda != 0 or self.l0_lambda != 0) and self.is_deepspeed_enabled:
             self.oracle_model = self.e_prepare_deepspeed(self.oracle_model)
 
     def e_prepare_deepspeed(self, model):
@@ -131,25 +111,16 @@ class CustomTrainerForgetting(Trainer):
         if model is not None:
             if hasattr(model, "config"):
                 hidden_size = (
-                    max(model.config.hidden_sizes)
-                    if getattr(model.config, "hidden_sizes", None)
-                    else getattr(model.config, "hidden_size", None)
+                    max(model.config.hidden_sizes) if getattr(model.config, "hidden_sizes", None) else getattr(model.config, "hidden_size", None)
                 )
-                if (
-                    hidden_size is not None
-                    and config_kwargs["zero_optimization"]["stage"] == 3
-                ):
+                if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
                     # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
                     # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
                     config_kwargs.update(
                         {
-                            "zero_optimization.reduce_bucket_size": hidden_size
-                            * hidden_size,
-                            "zero_optimization.stage3_param_persistence_threshold": 10
-                            * hidden_size,
-                            "zero_optimization.stage3_prefetch_bucket_size": 0.9
-                            * hidden_size
-                            * hidden_size,
+                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
+                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
+                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
                         }
                     )
 
@@ -172,16 +143,10 @@ class CustomTrainerForgetting(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False):
         forget_inputs, retain_inputs, *idk_inputs = inputs
-        forget_input_ids, forget_labels, forget_attention_mask = self.to_device(
-            model.device, forget_inputs
-        )
-        retain_input_ids, retain_labels, retain_attention_mask = self.to_device(
-            model.device, retain_inputs
-        )
+        forget_input_ids, forget_labels, forget_attention_mask = self.to_device(model.device, forget_inputs)
+        retain_input_ids, retain_labels, retain_attention_mask = self.to_device(model.device, retain_inputs)
         if idk_inputs:
-            idk_input_ids, idk_labels, idk_attention_mask = self.to_device(
-                model.device, idk_inputs[0]
-            )
+            idk_input_ids, idk_labels, idk_attention_mask = self.to_device(model.device, idk_inputs[0])
 
         if self.loss_type == "retain_ft":
             retain_outputs = model(
@@ -301,11 +266,7 @@ class CustomTrainerForgetting(Trainer):
                 log_target=True,
             )
 
-            loss = (
-                -1 * self.loss_beta * kl_forget_loss
-                + kl_retain_loss
-                + retain_outputs.loss
-            )
+            loss = -1 * self.loss_beta * kl_forget_loss + kl_retain_loss + retain_outputs.loss
 
         elif self.loss_type == "KL":
             forget_outputs = model(
@@ -347,9 +308,7 @@ class CustomTrainerForgetting(Trainer):
             )
             forget_loss = -1 * forget_outputs.loss
 
-            idk_outputs = model(
-                idk_input_ids, labels=idk_labels, attention_mask=idk_attention_mask
-            )
+            idk_outputs = model(idk_input_ids, labels=idk_labels, attention_mask=idk_attention_mask)
 
             random_loss = idk_outputs.loss
 
@@ -383,14 +342,8 @@ class CustomTrainerForgetting(Trainer):
                 updated_module = model.module.model.model.layers[7]
             else:
                 updated_module = model.model.layers[7]
-            forget_activations = forward_with_cache(
-                model, forget_inputs, updated_module, no_grad=False
-            ).to(model.device)
-            hidden_size = (
-                model.config.hidden_size
-                if not self.is_deepspeed_enabled
-                else model.module.model.config.hidden_size
-            )
+            forget_activations = forward_with_cache(model, forget_inputs, updated_module, no_grad=False).to(model.device)
+            hidden_size = model.config.hidden_size if not self.is_deepspeed_enabled else model.module.model.config.hidden_size
             rand_vec = torch.rand(
                 1,
                 1,
@@ -406,16 +359,10 @@ class CustomTrainerForgetting(Trainer):
                 oracle_updated_module = self.oracle_model.module.model.layers[7]
             else:
                 oracle_updated_module = self.oracle_model.model.layers[7]
-            retain_activations = forward_with_cache(
-                model, retain_inputs, updated_module, no_grad=False
-            ).to(model.device)
+            retain_activations = forward_with_cache(model, retain_inputs, updated_module, no_grad=False).to(model.device)
 
-            oracle_retain_activations = forward_with_cache(
-                self.oracle_model, retain_inputs, oracle_updated_module, no_grad=True
-            ).to(model.device)
-            retain_loss = torch.nn.functional.mse_loss(
-                retain_activations, oracle_retain_activations
-            )
+            oracle_retain_activations = forward_with_cache(self.oracle_model, retain_inputs, oracle_updated_module, no_grad=True).to(model.device)
+            retain_loss = torch.nn.functional.mse_loss(retain_activations, oracle_retain_activations)
 
             loss = forget_loss + retain_loss
 
@@ -451,20 +398,14 @@ class CustomTrainerForgetting(Trainer):
 
             pi_ratios = torch.log(forget_probs / oracle_forget_probs)
 
-            loss = (
-                2
-                / self.loss_beta
-                * torch.mean(torch.log(1 + pi_ratios**self.loss_beta))
-            )
+            loss = 2 / self.loss_beta * torch.mean(torch.log(1 + pi_ratios**self.loss_beta))
 
         elif self.loss_type == "idk":
             # "i dont know" inputs here are in forget inputs
             # then concatenate the inputs. single forward pass is much more efficient
             input_ids = torch.cat((forget_input_ids, retain_input_ids), dim=0)
             labels = torch.cat((forget_labels, retain_labels), dim=0)
-            attention_mask = torch.cat(
-                (forget_attention_mask, retain_attention_mask), dim=0
-            )
+            attention_mask = torch.cat((forget_attention_mask, retain_attention_mask), dim=0)
             outputs = model(input_ids, labels=labels, attention_mask=attention_mask)
             loss = outputs.loss
         elif self.loss_type == "eco_ft":
@@ -482,9 +423,7 @@ class CustomTrainerForgetting(Trainer):
             loss = self.loss_beta * forget_outputs.loss + retain_outputs.loss
 
         elif self.loss_type == "dpo":
-            idk_outputs = model(
-                idk_input_ids, labels=idk_labels, attention_mask=idk_attention_mask
-            )
+            idk_outputs = model(idk_input_ids, labels=idk_labels, attention_mask=idk_attention_mask)
             forget_outputs = model(
                 forget_input_ids,
                 labels=forget_labels,
@@ -492,9 +431,7 @@ class CustomTrainerForgetting(Trainer):
             )
 
             with torch.no_grad():
-                idk_outputs_oracle = self.oracle_model(
-                    idk_input_ids, labels=idk_labels, attention_mask=idk_attention_mask
-                )
+                idk_outputs_oracle = self.oracle_model(idk_input_ids, labels=idk_labels, attention_mask=idk_attention_mask)
                 forget_outputs_oracle = self.oracle_model(
                     forget_input_ids,
                     labels=forget_labels,
@@ -504,14 +441,10 @@ class CustomTrainerForgetting(Trainer):
                 forget_logits_oracle = forget_outputs_oracle.logits
 
             idk_loss_oracle = -1 * get_batch_loss(idk_logits_oracle, idk_labels)
-            forget_loss_oracle = -1 * get_batch_loss(
-                forget_logits_oracle, forget_labels
-            )
+            forget_loss_oracle = -1 * get_batch_loss(forget_logits_oracle, forget_labels)
 
             idk_loss_current = -1 * get_batch_loss(idk_outputs.logits, idk_labels)
-            forget_loss_current = -1 * get_batch_loss(
-                forget_outputs.logits, forget_labels
-            )
+            forget_loss_current = -1 * get_batch_loss(forget_outputs.logits, forget_labels)
 
             pi_logratios = idk_loss_current - forget_loss_current
             ref_logratios = idk_loss_oracle - forget_loss_oracle
@@ -525,9 +458,7 @@ class CustomTrainerForgetting(Trainer):
         else:
             raise ValueError(f"Invalid loss type {self.loss_type}")
 
-        if (self.l1_lambda is not None and self.l1_lambda != 0) or (
-            self.l0_lambda is not None and self.l0_lambda != 0
-        ):
+        if (self.l1_lambda is not None and self.l1_lambda != 0) or (self.l0_lambda is not None and self.l0_lambda != 0):
             params = []
 
             if has_lora_adapter(model):
@@ -539,12 +470,8 @@ class CustomTrainerForgetting(Trainer):
             else:
                 # just calculate the difference with original model
                 if self.oracle_model is None:
-                    raise ValueError(
-                        "Oracle model is required for L1\L0 regularization during training without LORA!"
-                    )
-                for param, oracle_param in zip(
-                    model.parameters(), self.oracle_model.parameters()
-                ):
+                    raise ValueError("Oracle model is required for L1\L0 regularization during training without LORA!")
+                for param, oracle_param in zip(model.parameters(), self.oracle_model.parameters()):
                     assert param.shape == oracle_param.shape
                     if param.requires_grad:
                         params.append((param - oracle_param.to(model.device)).view(-1))
@@ -557,9 +484,7 @@ class CustomTrainerForgetting(Trainer):
 
         return (loss, outputs) if return_outputs else loss
 
-    def prediction_step(
-        self, model, inputs, prediction_loss_only: bool, ignore_keys=None
-    ):
+    def prediction_step(self, model, inputs, prediction_loss_only: bool, ignore_keys=None):
         input_ids, labels, attention_mask = inputs
         # forward pass
         with torch.no_grad():
@@ -571,12 +496,7 @@ class CustomTrainerForgetting(Trainer):
 
 def custom_data_collator_forget(samples):
     # samples: batch_size x (forget, retain, idk(?) ) x (input_ids, label, attention_mask)
-    forget, retain, idk = zip(
-        *[
-            (sample[0], sample[1], sample[2] if len(sample) > 2 else None)
-            for sample in samples
-        ]
-    )
+    forget, retain, idk = zip(*[(sample[0], sample[1], sample[2] if len(sample) > 2 else None) for sample in samples])
 
     def stack_data(data):
         input_ids, labels, attention_masks = zip(*data)
