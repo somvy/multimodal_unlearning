@@ -1,4 +1,4 @@
-model_family: llava
+model_family: qwen-vl2-2b
 
 LoRA:
   r: 8
@@ -8,12 +8,13 @@ LoRA:
 resume_from_checkpoint: false
 data_path: therem/faces_v1
 split: full+tofu
-batch_size: 8
+batch_size: 4
 gradient_accumulation_steps: 2
-max_length: 512
-num_epochs: 7
+max_length: 2048
+num_epochs: 3
 lr: 1e-5
-save_dir: /home/dontsov/unlearning/models/${model_family}/ft_${split}_epoch${num_epochs}_lr${lr}__wd${weight_decay}_lora
+save_dir: /home/dontsov/unlearning/models/${model_family}/ft_${split}
 
 weight_decay: 0.01
 seed: 42
+freeze_vision_module: true

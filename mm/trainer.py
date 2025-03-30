@@ -14,13 +14,13 @@ from mm.trainer_utils import (
     get_batch_loss,
     has_lora_adapter,
     logits2probs,
-    loss_needs_oracle,
+    loss_needs_teacher,
     remove_image_tokens,
 )
 
 
 class MMTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         # print("trainer: 19 inputs: ", inputs.keys())
         # print("trainer: 19 pixel_values: ", inputs["pixel_values"].shape)
         # print("trainer: 19 input_ids: ", inputs["input_ids"].shape)
@@ -33,16 +33,16 @@ class MMTrainer(Trainer):
         outputs = model(**inputs)
         return (outputs.loss, outputs.logits, inputs["labels"])
 
-    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval):
-        super()._maybe_log_save_evaluate(tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval)
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, *args, **kwargs):
+        super()._maybe_log_save_evaluate(tr_loss, grad_norm, model, *args, **kwargs)
 
         # Log generation examples
         if self.args.logging_steps > 0 and self.state.global_step % self.args.logging_steps == 0:
             self._log_generation_examples(model)
 
-        gc.collect()
-        torch.cuda.empty_cache()
-        gc.collect()
+        # gc.collect()
+        # torch.cuda.empty_cache()
+        # gc.collect()
 
     def _log_generation_examples(self, model: torch.nn.Module, num_examples: int = 3):
         return  # Disable generation examples for now
@@ -111,20 +111,21 @@ class MMTrainer(Trainer):
 
 class MMTrainerForgetting(Trainer):
     def __init__(self, *args, **kwargs):
-        self.loss_type = kwargs.pop("forget_loss")
-        self.oracle_model = kwargs.pop("oracle_model")
+        self.loss_type = kwargs.pop("forget_loss").lower()
+        self.teacher_model = kwargs.pop("teacher_model")
         self.loss_beta = kwargs.pop("loss_beta")
         self.l1_lambda = kwargs.pop("l1_lambda")
         self.l0_lambda = kwargs.pop("l0_lambda")
         self.l_norm_from = kwargs.pop("l_norm_from")
+        self.loss_args = kwargs.pop("loss_args", {})
+
         if self.l1_lambda and self.l1_lambda != 0 and self.l_norm_from not in ("zero", "init"):
             raise ValueError(f"Invalid l_norm_from {self.l_norm_from}, should be 'zero' or 'init'")
 
         super(MMTrainerForgetting, self).__init__(*args, **kwargs)
-        if (
-            loss_needs_oracle(self.loss_type) or self.l1_lambda != 0 or self.l0_lambda != 0
-        ) and self.is_deepspeed_enabled:
-            self.oracle_model = self.e_prepare_deepspeed(self.oracle_model)
+
+        if (loss_needs_teacher(self.loss_type) or self.l1_lambda != 0 or self.l0_lambda != 0) and self.is_deepspeed_enabled:
+            self.teacher_model = self.e_prepare_deepspeed(self.teacher_model)
 
     def e_prepare_deepspeed(self, model):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
@@ -134,9 +135,7 @@ class MMTrainerForgetting(Trainer):
         if model is not None:
             if hasattr(model, "config"):
                 hidden_size = (
-                    max(model.config.hidden_sizes)
-                    if getattr(model.config, "hidden_sizes", None)
-                    else getattr(model.config, "hidden_size", None)
+                    max(model.config.hidden_sizes) if getattr(model.config, "hidden_sizes", None) else getattr(model.config, "hidden_size", None)
                 )
                 if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
                     # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
@@ -166,14 +165,16 @@ class MMTrainerForgetting(Trainer):
     def to_device(device, inputs):
         return {k: v.to(device) for k, v in inputs.items()}
 
-    def compute_loss(self, model, inputs, return_outputs=False):
-        model.device = next(model.parameters()).device
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        # model.device = model.device
         retain_inputs = self.to_device(model.device, inputs["retain"])
 
         if "idk" in inputs:
             idk_inputs = self.to_device(model.device, inputs["idk"])
         if "forget" in inputs:
             forget_inputs = self.to_device(model.device, inputs["forget"])
+        if "random" in inputs:
+            random_inputs = self.to_device(model.device, inputs["random"])
 
         if self.loss_type == "retain_ft":
             retain_outputs = model(**retain_inputs)
@@ -194,9 +195,9 @@ class MMTrainerForgetting(Trainer):
                 forget_probs = logits2probs(forget_outputs.logits, log=False)
                 forget_loss = torch.sum(forget_probs * torch.log(forget_probs))
 
-            elif "forget_KL" in self.loss_type:
+            elif "forget_kl" in self.loss_type:
                 with torch.no_grad():
-                    oracle_forget_outputs = self.oracle_model(**forget_inputs)
+                    oracle_forget_outputs = self.teacher_model(**forget_inputs)
                 oracle_forget_probs = logits2probs(oracle_forget_outputs.logits)
                 forget_probs = logits2probs(forget_outputs.logits)
                 forget_loss = nn.functional.kl_div(
@@ -211,9 +212,9 @@ class MMTrainerForgetting(Trainer):
             if "retain_ce" in self.loss_type:
                 retain_loss = retain_outputs.loss
 
-            elif "retain_KL" in self.loss_type:
+            elif "retain_kl" in self.loss_type:
                 with torch.no_grad():
-                    oracle_retain_outputs = self.oracle_model(**retain_inputs)
+                    oracle_retain_outputs = self.teacher_model(**retain_inputs)
                 oracle_retain_probs = logits2probs(oracle_retain_outputs.logits)
                 retain_probs = logits2probs(retain_outputs.logits)
                 retain_loss = nn.functional.kl_div(
@@ -231,7 +232,7 @@ class MMTrainerForgetting(Trainer):
             forget_outputs = model(**forget_inputs)
             forget_probs = logits2probs(forget_outputs.logits)
             with torch.no_grad():
-                oracle_forget_outputs = self.oracle_model(**forget_inputs)
+                oracle_forget_outputs = self.teacher_model(**forget_inputs)
             oracle_forget_probs = logits2probs(oracle_forget_outputs.logits)
             kl_forget_loss = nn.functional.kl_div(
                 oracle_forget_probs,
@@ -243,7 +244,7 @@ class MMTrainerForgetting(Trainer):
             retain_outputs = model(**retain_inputs)
             retain_probs = logits2probs(retain_outputs.logits)
             with torch.no_grad():
-                oracle_retain_outputs = self.oracle_model(**retain_inputs)
+                oracle_retain_outputs = self.teacher_model(**retain_inputs)
             oracle_retain_probs = logits2probs(oracle_retain_outputs.logits)
 
             kl_retain_loss = nn.functional.kl_div(
@@ -255,12 +256,12 @@ class MMTrainerForgetting(Trainer):
 
             loss = -1 * self.loss_beta * kl_forget_loss + kl_retain_loss + retain_outputs.loss
 
-        elif self.loss_type == "KL":
+        elif self.loss_type == "kl":
             forget_outputs = model(**forget_inputs)
             forget_loss = -1 * forget_outputs.loss
 
             with torch.no_grad():
-                oracle_retain_outputs = self.oracle_model(**retain_inputs)
+                oracle_retain_outputs = self.teacher_model(**retain_inputs)
             oracle_retain_probs = logits2probs(oracle_retain_outputs.logits)
 
             retain_outputs = model(**retain_inputs)
@@ -275,7 +276,7 @@ class MMTrainerForgetting(Trainer):
             )
             loss = forget_loss + retain_loss
 
-        elif self.loss_type == "LLMU":
+        elif self.loss_type == "llmu":
             forget_outputs = model(**forget_inputs)
             forget_loss = -1 * forget_outputs.loss
 
@@ -285,7 +286,7 @@ class MMTrainerForgetting(Trainer):
 
             retain_outputs = model(**retain_inputs)
             with torch.no_grad():
-                oracle_retain_outputs = self.oracle_model(**retain_inputs)
+                oracle_retain_outputs = self.teacher_model(**retain_inputs)
 
             oracle_retain_probs = logits2probs(oracle_retain_outputs.logits)
             retain_probs = logits2probs(retain_outputs.logits)
@@ -298,39 +299,28 @@ class MMTrainerForgetting(Trainer):
             )
             loss = forget_loss + retain_loss + random_loss
 
-        elif self.loss_type == "RMU":
+        elif self.loss_type == "rmu":
             # !python3 -m rmu.unlearn --model_name mistralai/Mixtral-8x7B-Instruct-v0.1  --param_ids 7 --steering_coeffs 300,300 --alpha 1600,1600  --output_dir models/mixtral_rmu
             if self.is_deepspeed_enabled:
-                updated_module = model.module.model.language_model.model.layers[7]
-                oracle_updated_module = self.oracle_model.module.language_model.model.layers[7]
+                target_module = model.module.model.language_model.model.layers[7]
+                oracle_target_module = self.teacher_model.module.language_model.model.layers[7]
             else:
-                updated_module = model.language_model.model.layers[7]
-                oracle_updated_module = self.oracle_model.language_model.model.layers[7]
+                target_module = model.language_model.model.layers[7]
+                oracle_target_module = self.teacher_model.language_model.model.layers[7]
 
-            forget_activations = forward_with_cache(model, forget_inputs, updated_module, no_grad=False).to(
-                model.device
-            )
-            hidden_size = (
-                model.config.hidden_size if not self.is_deepspeed_enabled else model.module.model.config.hidden_size
-            )
-            rand_vec = torch.rand(
-                1,
-                1,
-                hidden_size,
-                dtype=forget_activations.dtype,
-                device=forget_activations.device,
-            )
-            control_vec = rand_vec / torch.norm(rand_vec) * 300
-            forget_loss = torch.nn.functional.mse_loss(forget_activations, control_vec)
+            forget_activations = forward_with_cache(model, forget_inputs, target_module, no_grad=False)  # .to(model.device)
+
+            if self.__dict__.get("control_vec", None) is None:
+                hidden_size = model.config.hidden_size if not self.is_deepspeed_enabled else model.module.model.config.hidden_size
+                batch_size = forget_activations.shape[0]
+                rand_vec = torch.rand(batch_size, 1, hidden_size, dtype=forget_activations.dtype, device=forget_activations.device)
+                self.control_vec = rand_vec / torch.norm(rand_vec) * 300
+
+            forget_loss = torch.nn.functional.mse_loss(forget_activations.mean(dim=1), self.control_vec)
             forget_loss *= self.loss_beta
 
-            retain_activations = forward_with_cache(model, retain_inputs, updated_module, no_grad=False).to(
-                model.device
-            )
-
-            oracle_retain_activations = forward_with_cache(
-                self.oracle_model, retain_inputs, oracle_updated_module, no_grad=True
-            ).to(model.device)
+            retain_activations = forward_with_cache(model, retain_inputs, target_module, no_grad=False).to(model.device)
+            oracle_retain_activations = forward_with_cache(self.teacher_model, retain_inputs, oracle_target_module, no_grad=True).to(model.device)
             retain_loss = torch.nn.functional.mse_loss(retain_activations, oracle_retain_activations)
 
             loss = forget_loss + retain_loss
@@ -353,13 +343,14 @@ class MMTrainerForgetting(Trainer):
         elif self.loss_type == "npo":
             forget_outputs = model(**forget_inputs)
             with torch.no_grad():
-                oracle_forget_outputs = self.oracle_model(**forget_inputs)
+                oracle_forget_outputs = self.teacher_model(**forget_inputs)
+
             oracle_forget_probs = logits2probs(oracle_forget_outputs.logits, log=False)
             forget_probs = logits2probs(forget_outputs.logits, log=False)
 
-            pi_ratios = torch.log(forget_probs / oracle_forget_probs)
+            pi_ratios = forget_probs / (oracle_forget_probs + 1e-8)
 
-            loss = 2 / self.loss_beta * torch.mean(torch.log(1 + pi_ratios**self.loss_beta))
+            loss = (2 / self.loss_beta) * torch.mean(torch.log(1 + torch.pow(pi_ratios, self.loss_beta)))
 
         elif self.loss_type == "idk":
             retain_outputs = model(**retain_inputs)
@@ -375,17 +366,11 @@ class MMTrainerForgetting(Trainer):
             forget_outputs = model(**forget_inputs)
 
             with torch.no_grad():
-                idk_outputs_oracle = self.oracle_model(**idk_inputs)
-                forget_outputs_oracle = self.oracle_model(**forget_inputs)
-            image_token_index = (
-                model.config.image_token_index
-                if not self.is_deepspeed_enabled
-                else model.module.model.config.image_token_index
-            )
+                idk_outputs_oracle = self.teacher_model(**idk_inputs)
+                forget_outputs_oracle = self.teacher_model(**forget_inputs)
+            image_token_index = model.config.image_token_index if not self.is_deepspeed_enabled else model.module.model.config.image_token_index
 
-            idk_logits_oracle = remove_image_tokens(
-                idk_inputs["input_ids"], idk_outputs_oracle.logits, image_token_index
-            )
+            idk_logits_oracle = remove_image_tokens(idk_inputs["input_ids"], idk_outputs_oracle.logits, image_token_index)
 
             idk_loss_oracle = -1 * get_batch_loss(idk_logits_oracle, idk_inputs["labels"])
 
@@ -411,17 +396,54 @@ class MMTrainerForgetting(Trainer):
             loss = -idk_loss_current.mean()
 
             outputs = forget_outputs
-        elif self.loss_type == "multi_delete":
-            # raise NotImplementedError("multi_delete is not implemented yet")
-            # get inputs, calculate cliploss between them
-            current_model = model.module.model if self.is_deepspeed_enabled else model
-            image_outputs = current_model.vision_tower(pixel_values, output_hidden_states=True)
-            image_embs = current_model.multi_modal_projector(
-                image_outputs.hidden_states[model.config.vision_feature_layer][:, 1:]
+
+        # elif self.loss_type == "multi_delete":
+        #     # raise NotImplementedError("multi_delete is not implemented yet")
+        #     # get inputs, calculate cliploss between them
+        #     current_model = model.module.model if self.is_deepspeed_enabled else model
+        #     image_outputs = current_model.vision_tower(pixel_values, output_hidden_states=True)
+        #     image_embs = current_model.multi_modal_projector(
+        #         image_outputs.hidden_states[model.config.vision_feature_layer][:, 1:]
+        #     )
+
+        #     # from which token extract embs
+        #     # text_embs =
+
+        elif self.loss_type == "sku":
+            # based on https://github.com/franciscoliu/SKU/blob/main/harmful_unlearn/unlearn_harm_new.py
+
+            bad_loss = model(**forget_inputs).loss
+
+            # the preprocessing is done in the dataset.py::MMMixedForgetDataset
+            # random_inputs contains list of lists, each contains K inputs
+            # total shape : batch_size x K samples x seq_len
+            for k, v in random_inputs.items():
+                random_inputs[k] = v.transpose(0, 1).to(model.device)
+            # FIXME: here may be CUDA memory overflow, due to the larger number of samples
+            K = random_inputs["input_ids"].shape[0]
+
+            random_loss = 0.0
+
+            for i in range(K):
+                inputs = {k: v[i] for k, v in random_inputs.items()}
+                random_loss += model(**inputs).loss
+
+            with torch.no_grad():
+                teacher_retain_logprobs = logits2probs(self.teacher_model(**retain_inputs).logits)
+            retain_logprobs = logits2probs(model(**retain_inputs).logits)
+
+            normal_loss = -1 * nn.functional.kl_div(
+                retain_logprobs,
+                teacher_retain_logprobs,
+                reduction="batchmean",
+                log_target=True,
             )
 
-            # from which token extract embs
-            # text_embs =
+            loss = (
+                self.loss_args["bad_weight"] * bad_loss
+                + self.loss_args["random_weight"] * random_loss
+                + self.loss_args["normal_weight"] * normal_loss
+            )
 
         else:
             raise ValueError(f"Invalid loss type {self.loss_type}")
@@ -437,18 +459,17 @@ class MMTrainerForgetting(Trainer):
 
                 else:
                     # just calculate the difference with original model
-                    if self.oracle_model is None:
-                        raise ValueError(
-                            "Oracle model is required for L1\L0 regularization during training without LORA!"
-                        )
-                    for param, oracle_param in zip(model.parameters(), self.oracle_model.parameters()):
-                        assert param.shape == oracle_param.shape
+                    if self.teacher_model is None:
+                        raise ValueError("Teacher model is required for L1\L0 regularization during training without LORA!")
+                    for param, teacher_param in zip(model.parameters(), self.teacher_model.parameters()):
+                        assert param.shape == teacher_param.shape
                         if param.requires_grad:
-                            params.append((param - oracle_param.to(model.device)).view(-1))
+                            params.append((param - teacher_param.to(model.device)).view(-1))
+
             elif self.l_norm_from == "zero":
                 if has_lora_adapter(model):
                     raise ValueError("L1\L0 regularization is not supported for LORA!")
-                
+
                 for param in model.parameters():
                     if param.requires_grad:
                         params.append(param.view(-1))

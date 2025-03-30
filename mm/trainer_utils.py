@@ -1,10 +1,12 @@
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
+import torch.nn.functional as F
+
+LOSSES_WITH_TEACHER = ("DPO", "SCRUB", "RMU", "LLMU", "SKU", "NPO")
 
 
-def loss_needs_oracle(loss_type: str):
-    return "KL" in loss_type or loss_type in ("dpo", "scrub", "RMU", "LLMU")
+def loss_needs_teacher(loss_type: str):
+    return "KL" in loss_type or loss_type.upper() in LOSSES_WITH_TEACHER
 
 
 def has_lora_adapter(model):
@@ -31,7 +33,6 @@ def forward_with_cache(model, inputs, module, no_grad=True):
         return None
 
     hook_handle = module.register_forward_hook(hook)
-    inputs = {k: v.to(model.device) for k, v in zip(["input_ids", "labels", "attention_mask"], inputs)}
 
     if no_grad:
         with torch.no_grad():

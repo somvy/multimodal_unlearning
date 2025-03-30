@@ -1,7 +1,7 @@
-model_family: llava
-model_path: models/llava/ft_full+tofu_epoch3_lr1e-05__wd0.01_lora
+model_family: qwen-vl2-2b
+model_path: models/qwen-vl2-2b/ft_full+tofu
 LoRA:
-  r: 8
+  r: 0
   alpha: 32
   dropout: 0.00
 
@@ -9,10 +9,10 @@ lr: 1e-5
 forget_data_path: therem/faces_v1
 retain_data_path: therem/faces_v1
 
-forget_split: forget10
+forget_split: forget10+tofu
 retain_split: retain90+tofu
 batch_size: 2
-gradient_accumulation_steps: 2
+gradient_accumulation_steps: 4
 num_epochs: 5
 # available losses 
 # retain_ft - finetune on retain
@@ -35,15 +35,16 @@ num_epochs: 5
 # influence - 
 # multi delete
 
-forget_loss: retain_ft
+forget_loss: grad_diff_forget_ce_retain_ce
 # max_grad_norm: 
 loss_beta: 1.0
 # calculate l1\l0 norm from zero, or from the initial model
 # zero\init
 l_norm_from: zero
 # l1 and l0 regularization weights
-l1_lambda: 0.1
+l1_lambda: 0.0
 l0_lambda: 0.0
+max_length: 2048
 
 save_dir: ${model_path}/${forget_loss}_${forget_split}_L1_${l1_lambda}_from${l_norm_from}
 # save_dir: ${model_path}/RMU_init_0.01
@@ -53,3 +54,4 @@ eval_while_train: false
 save_ckpts: false
 save_model: true
 seed: 42
+freeze_vision_module: true

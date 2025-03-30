@@ -46,15 +46,34 @@ mistral:
   gradient_checkpointing: "false"
   ft_model_path: "locuslab/tofu_ft_mistral"
 
+# configs for vision-language models
+# hf_key - the key to the huggingface model
+# flash_attention2 - whether to use flash attention 2, usually set to true
+# gradient_checkpointing - whether to use gradient checkpointing, usually false, set if want to reduce gpu memory usage
+# chat_template -- needed for old models without chat template, new models come with it (in the processor.tokenizer.chat_template)
+# hf_class -- from module to import from transformers to use the model, take from the readme
+# like 
+#     from transformers import AutoModelForPreTraining
+#     llava = AutoModelForPreTraining.from_pretrained(""llava-hf/llava-1.5-7b-hf"")
+# vision_module -- the name of the vision module if you want to freeze it, the freezing is set in the config files mm/finetune|forget.yaml
 llava:
   hf_key: "llava-hf/llava-1.5-7b-hf"
   flash_attention2: "true"
   gradient_checkpointing: "false"
   chat_template: "{% for message in messages %}{% if message['role'] == 'system' %}{{ message['content'][0]['text'] }}{% else %}{{ message['role'].upper() + ': '}}{% endif %}{# Render all images first #}{% for content in message['content'] | selectattr('type', 'equalto', 'image') %}{{ '<image>\n' }}{% endfor %}{# Render all text next #}{% for content in message['content'] | selectattr('type', 'equalto', 'text') %}{{ content['text'] + ' '}}{% endfor %}{% endfor %}{% if add_generation_prompt %}{{ 'ASSISTANT:' }}{% endif %}"
+  hf_class: AutoModelForPreTraining
+  vision_module: "vision_tower"
 
-llava-next:
-  hf_key: "llava-hf/llava-v1.6-vicuna-7b-hf"
+qwen-vl-3b:
+  hf_key: "Qwen/Qwen2.5-VL-3B-Instruct"
+  flash_attention2: "true"
+  gradient_checkpointing: "true"
+  hf_class: Qwen2_5_VLForConditionalGeneration
+  vision_module: "visual"
+
+qwen-vl2-2b:
+  hf_key: "Qwen/Qwen2-VL-2B-Instruct"
   flash_attention2: "true"
   gradient_checkpointing: "false"
-  chat_template: "{% for message in messages %}{% if message['role'] == 'system' %}{{ message['content'][0]['text'] }}{% else %}{{ message['role'].upper() + ': '}}{% endif %}{# Render all images first #}{% for content in message['content'] | selectattr('type', 'equalto', 'image') %}{{ '<image>\n' }}{% endfor %}{# Render all text next #}{% for content in message['content'] | selectattr('type', 'equalto', 'text') %}{{ content['text'] + ' '}}{% endfor %}{% endfor %}{% if add_generation_prompt %}{{ 'ASSISTANT:' }}{% endif %}"
-
+  hf_class: Qwen2VLForConditionalGeneration
+  vision_module: "visual"
