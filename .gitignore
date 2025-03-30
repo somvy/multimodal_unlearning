@@ -14,8 +14,6 @@ outputs/*
 results/*
 results_old/*
 .vscode
-temp.ipynb
-tofuset.ipynb
 output
 mm/mm_results
 mm/llm_res
@@ -23,5 +21,12 @@ vote_and_rank
 caos
 methods
 .idea
-mm/agg.csv
+mm/ds_images
+mm/ds_real_images
+mm/modailties_results
+mm/outputs
+mm/data
 *.ipynb
+*.csv
+*.png
+*.json
