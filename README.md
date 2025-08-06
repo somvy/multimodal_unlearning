@@ -96,3 +96,36 @@ Run -
 The result of the experiment will be available in save_file
 
 
+## Citing
+
+If you find our dataset useful, please cite:
+
+```
+@inproceedings{clear,
+    title = "{CLEAR}: Character Unlearning in Textual and Visual Modalities",
+    author = "Dontsov, Alexey  and
+      Korzh, Dmitrii  and
+      Zhavoronkin, Alexey  and
+      Mikheev, Boris  and
+      Bobkov, Denis  and
+      Alanov, Aibek  and
+      Rogov, Oleg  and
+      Oseledets, Ivan  and
+      Tutubalina, Elena",
+    editor = "Che, Wanxiang  and
+      Nabende, Joyce  and
+      Shutova, Ekaterina  and
+      Pilehvar, Mohammad Taher",
+    booktitle = "Findings of the Association for Computational Linguistics: ACL 2025",
+    month = jul,
+    year = "2025",
+    address = "Vienna, Austria",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2025.findings-acl.1058/",
+    doi = "10.18653/v1/2025.findings-acl.1058",
+    pages = "20582--20603",
+    ISBN = "979-8-89176-256-5",
+    abstract = "Machine Unlearning (MU) is critical for removing private or hazardous information from deep learning models. While MU has advanced significantly in unimodal (text or vision) settings, multimodal unlearning (MMU) remains underexplored due to the lack of open benchmarks for evaluating cross-modal data removal. To address this gap, we introduce CLEAR, the first open-source benchmark designed specifically for MMU. CLEAR contains 200 fictitious individuals and 3,700 images linked with corresponding question-answer pairs, enabling a thorough evaluation across modalities. We conduct a comprehensive analysis of 11 MU methods (e.g., SCRUB, gradient ascent, DPO) across four evaluation sets, demonstrating that jointly unlearning both modalities outperforms single-modality approaches. The dataset is available at [link](https://huggingface.co/datasets/therem/CLEAR)"
+}
+```
+
